@@ -1,0 +1,87 @@
+# =============================================================
+# LECCION 3 — Matrix, artifacts y outputs entre jobs
+# Objetivo: correr el mismo job en varias combinaciones en paralelo,
+# guardar archivos del run y pasar datos de un job a otro.
+# =============================================================
+name: 03 - Matrix y artifacts
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }} en ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      # false = si una combinacion falla, las demas siguen corriendo.
+      # Asi ves TODOS los fallos de una vez, no solo el primero.
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
+        os: [ubuntu-latest, windows-latest]
+        # 'exclude' quita combinaciones concretas del producto cartesiano.
+        exclude:
+          - os: windows-latest
+            node: 20
+        # 'include' agrega una combinacion extra o campos a las existentes.
+        include:
+          - os: ubuntu-latest
+            node: 22
+            principal: true
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Tests con reporte
+        run: npm test -- --test-reporter=spec 2>&1 | tee resultado.txt
+
+      # Solo la combinacion marcada como principal sube el artifact,
+      # si no tendrias 5 archivos con el mismo nombre.
+      - name: Guardar el reporte
+        if: matrix.principal
+        uses: actions/upload-artifact@v4
+        with:
+          name: reporte-tests
+          path: resultado.txt
+          retention-days: 7
+
+  publicar:
+    name: Consolidar
+    runs-on: ubuntu-latest
+    needs: test
+    # Corre aunque alguna combinacion de la matriz haya fallado.
+    if: always()
+
+    steps:
+      # Descargar lo que produjo el job anterior.
+      - name: Bajar el artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: reporte-tests
+        continue-on-error: true # puede no existir si todo fallo
+
+      - name: Resumen
+        run: |
+          {
+            echo "## Resultado de la matriz"
+            echo ""
+            echo "Estado del job de tests: **${{ needs.test.result }}**"
+            echo ""
+            if [ -f resultado.txt ]; then
+              echo '```'
+              tail -n 20 resultado.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

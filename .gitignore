@@ -1,0 +1,6 @@
+node_modules/
+*.log
+server.pid
+resultado.txt
+.env
+.DS_Store

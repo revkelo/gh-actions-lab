@@ -1,0 +1,90 @@
+# =============================================================
+# LECCION 2 — El CI de verdad
+# Objetivo: checkout, setup-node con cache, npm ci, tests,
+# concurrency (cancelar runs viejos) y jobs que dependen de otros.
+# Este es el workflow que replicaras en el 90% de tus repos.
+# =============================================================
+name: 02 - CI
+
+on:
+  push:
+    branches: [main]
+  pull_request: # cualquier PR contra cualquier rama
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Si haces 3 pushes seguidos a la misma rama, cancela los 2 primeros.
+# Ahorra minutos y te da feedback del codigo mas nuevo primero.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests unitarios
+    runs-on: ubuntu-latest
+    timeout-minutes: 5 # red de seguridad contra jobs colgados
+
+    steps:
+      # El runner arranca VACIO: sin esto no hay codigo que testear.
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Configurar Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm # cachea ~/.npm entre runs segun package-lock.json
+
+      # 'npm ci' != 'npm install': ci respeta el lockfile exacto y falla
+      # si package.json y el lock no concuerdan. Siempre ci en pipelines.
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Ejecutar tests
+        run: npm test
+
+  smoke:
+    name: Smoke test del servidor
+    runs-on: ubuntu-latest
+    needs: test # no arranca hasta que 'test' pase en verde
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # Levantamos el server en background y probamos que responde de verdad.
+      - name: Arrancar el servidor
+        run: |
+          npm start &
+          echo $! > server.pid
+
+      - name: Esperar a que este listo
+        run: |
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:3000/health > /dev/null; then
+              echo "Servidor arriba tras $i intentos"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "El servidor nunca respondio"
+          exit 1
+
+      - name: Probar los endpoints
+        run: |
+          set -e
+          curl -sf "http://localhost:3000/api/sum?a=2&b=3" | grep '"result":5'
+          curl -sf "http://localhost:3000/api/slug?text=Hola%20Mundo" | grep '"slug":"hola-mundo"'
+          echo "Endpoints OK"
+
+      # 'always()' hace que el step corra aunque los anteriores fallen.
+      - name: Apagar el servidor
+        if: always()
+        run: kill "$(cat server.pid)" || true

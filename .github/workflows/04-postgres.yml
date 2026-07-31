@@ -1,0 +1,77 @@
+# =============================================================
+# LECCION 4 — Services (contenedores auxiliares)
+# Objetivo: levantar Postgres junto al job para testear contra
+# una base real, con healthcheck y secrets.
+# Esto es lo que le falta hoy al CI de autoreel.
+# =============================================================
+name: 04 - Postgres como service
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  db:
+    runs-on: ubuntu-latest
+
+    # GitHub levanta estos contenedores ANTES de los steps y los
+    # expone en localhost. Se destruyen al terminar el job.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: lab
+          # En un repo real esto seria ${{ secrets.PG_PASSWORD }}.
+          # Aqui es una BD efimera que muere con el job, no pasa nada.
+          POSTGRES_PASSWORD: lab
+          POSTGRES_DB: labdb
+        ports:
+          - 5432:5432
+        # SIN esto el job arranca antes de que Postgres acepte conexiones
+        # y falla de forma intermitente. Es el error #1 con services.
+        options: >-
+          --health-cmd "pg_isready -U lab"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://lab:lab@localhost:5432/labdb
+      PGPASSWORD: lab
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Verificar conexion
+        run: psql "$DATABASE_URL" -c "SELECT version();"
+
+      - name: Crear esquema
+        run: |
+          psql "$DATABASE_URL" <<'SQL'
+          CREATE TABLE videos (
+            id     SERIAL PRIMARY KEY,
+            slug   TEXT NOT NULL UNIQUE,
+            estado TEXT NOT NULL DEFAULT 'pendiente'
+          );
+          INSERT INTO videos (slug) VALUES ('hola-mundo'), ('mi-primer-reel');
+          SQL
+
+      - name: Consultar
+        run: |
+          psql "$DATABASE_URL" -c "SELECT * FROM videos;"
+          total=$(psql "$DATABASE_URL" -tAc "SELECT count(*) FROM videos;")
+          echo "Filas insertadas: $total"
+          [ "$total" -eq 2 ] || { echo "Se esperaban 2 filas"; exit 1; }
+
+      - name: Correr los tests con la BD disponible
+        run: npm test

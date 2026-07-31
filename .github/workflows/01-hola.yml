@@ -1,0 +1,80 @@
+# =============================================================
+# LECCION 1 — Anatomia de un workflow
+# Objetivo: entender name / on / jobs / steps, inputs, env,
+# contextos ${{ }}, outputs entre steps y el step summary.
+# Se dispara SOLO a mano desde la pestana Actions.
+# =============================================================
+name: 01 - Hola Actions
+
+# 'on' define QUE dispara el workflow.
+# OJO con YAML: 'on' sin comillas se parsea bien en Actions, pero en
+# YAML 1.1 puro es el booleano true. Por eso veras gente escribiendo "on":.
+on:
+  workflow_dispatch: # ejecucion manual con boton
+    inputs:
+      nombre:
+        description: 'A quien saludamos'
+        required: true
+        default: 'Kevin'
+        type: string
+      entorno:
+        description: 'Entorno simulado'
+        type: choice
+        options: [dev, staging, prod]
+        default: dev
+
+# Permisos del GITHUB_TOKEN. Regla de oro: minimo necesario.
+permissions:
+  contents: read
+
+# Variables disponibles para TODOS los jobs.
+env:
+  APP_NAME: gh-actions-lab
+
+jobs:
+  saludar:
+    # El runner: maquina virtual limpia que GitHub crea y destruye.
+    runs-on: ubuntu-latest
+
+    steps:
+      # Un step es un comando (run) o una accion reutilizable (uses).
+      - name: Saludo con el input
+        run: echo "Hola ${{ inputs.nombre }}, bienvenido a $APP_NAME (entorno ${{ inputs.entorno }})"
+
+      - name: Explorar los contextos disponibles
+        run: |
+          echo "Repo:    ${{ github.repository }}"
+          echo "Rama:    ${{ github.ref_name }}"
+          echo "SHA:     ${{ github.sha }}"
+          echo "Actor:   ${{ github.actor }}"
+          echo "Evento:  ${{ github.event_name }}"
+          echo "Run #:   ${{ github.run_number }}"
+          echo "SO:      ${{ runner.os }}"
+
+      # Un step con 'id' puede exportar outputs para los siguientes.
+      - name: Generar un output
+        id: meta
+        run: |
+          echo "fecha=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+      - name: Consumir el output del step anterior
+        run: echo "Build del ${{ steps.meta.outputs.fecha }} sobre ${{ steps.meta.outputs.short_sha }}"
+
+      # 'if' con expresiones: el step se salta si no se cumple.
+      - name: Solo si el entorno es prod
+        if: inputs.entorno == 'prod'
+        run: echo "Desplegando a produccion (mentiras, es un echo)"
+
+      # El summary se renderiza como markdown en la pagina del run.
+      - name: Escribir el resumen del run
+        run: |
+          {
+            echo "## Resumen"
+            echo ""
+            echo "| Campo | Valor |"
+            echo "|---|---|"
+            echo "| Saludado | ${{ inputs.nombre }} |"
+            echo "| Entorno | ${{ inputs.entorno }} |"
+            echo "| Commit | \`${{ steps.meta.outputs.short_sha }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
